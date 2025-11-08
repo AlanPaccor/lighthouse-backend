@@ -1,23 +1,84 @@
-# Test query endpoint
-curl -X POST http://localhost:8080/api/traces/query \
--H "Content-Type: application/json" \
--d '{"prompt": "What is the capital of France?"}'
+### Lighthouse API Test File
+### Use VS Code REST Client extension or IntelliJ HTTP Client
 
-# Get all traces
-curl http://localhost:8080/api/traces
+### Variables
+@baseUrl = http://localhost:8080
+@apiKey = lh_0b937ed4f14a4254b6ec213337aea8af
 
-# Get stats
-curl http://localhost:8080/api/traces/stats
+### ============================================
+### 1. CREATE A PROJECT (Do this first!)
+### ============================================
+POST {{baseUrl}}/api/projects
+Content-Type: application/json
 
-##
+{
+  "name": "Test Project",
+  "description": "My test project for SDK"
+}
 
-###
-# curl -X POST http://localhost:8080/api/traces/query -H "Content-Type: application/json" -d "{\"prompt\": \"What is the capital of France?\"}"
-POST http://localhost:8080/api/traces/query
+### ============================================
+### 2. GET ALL PROJECTS
+### ============================================
+GET {{baseUrl}}/api/projects
+
+### ============================================
+### 3. TEST SDK ENDPOINT (External SDK sends traces here)
+### ============================================
+POST {{baseUrl}}/api/sdk/traces
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "prompt": "Hello, how are you?",
+  "response": "I am doing well, thank you!",
+  "tokensUsed": 150,
+  "costUsd": 0.0003,
+  "latencyMs": 250,
+  "provider": "openai"
+}
+
+### ============================================
+### 4. TEST QUERY ENDPOINT (Internal - uses your Gemini API)
+### ============================================
+POST {{baseUrl}}/api/traces/query
 Content-Type: application/json
 
 {
   "prompt": "What is the capital of France?"
 }
 
-###
+### ============================================
+### 5. GET ALL TRACES
+### ============================================
+GET {{baseUrl}}/api/traces
+
+### ============================================
+### 6. GET TRACES BY PROJECT
+### ============================================
+GET {{baseUrl}}/api/traces?projectId=ac33f44c-47e4-4685-9c69-c4254695a0b3
+
+### ============================================
+### 7. GET STATS (All traces)
+### ============================================
+GET {{baseUrl}}/api/traces/stats
+
+### ============================================
+### 8. GET STATS BY PROJECT
+### ============================================
+GET {{baseUrl}}/api/traces/stats?projectId=ac33f44c-47e4-4685-9c69-c4254695a0b3
+
+### ============================================
+### 9. GET SINGLE TRACE BY ID
+### Replace TRACE_ID_HERE with actual trace ID
+### ============================================
+GET {{baseUrl}}/api/traces/TRACE_ID_HERE
+
+### ============================================
+### 10. CLEAR ALL TRACES
+### ============================================
+DELETE {{baseUrl}}/api/traces/clear
+
+### ============================================
+### 11. DELETE A PROJECT
+### ============================================
+DELETE {{baseUrl}}/api/projects/ac33f44c-47e4-4685-9c69-c4254695a0b3

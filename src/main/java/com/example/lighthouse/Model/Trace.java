@@ -4,6 +4,9 @@ package com.example.lighthouse.Model;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
+// Add import for Project
+import com.example.lighthouse.Model.Project;
+
 @Entity
 @Table(name = "traces")
 public class Trace {
@@ -16,19 +19,11 @@ public class Trace {
 
     @Column(columnDefinition = "TEXT")
     private String response;
-    // Add to src/main/java/com/example/lighthouse/Model/Trace.java
 
     @Column(columnDefinition = "TEXT")
     private String hallucinationData; // JSON string with hallucination results
 
     private Double confidenceScore; // 0-100
-
-    // Getters and Setters
-    public String getHallucinationData() { return hallucinationData; }
-    public void setHallucinationData(String hallucinationData) { this.hallucinationData = hallucinationData; }
-
-    public Double getConfidenceScore() { return confidenceScore; }
-    public void setConfidenceScore(Double confidenceScore) { this.confidenceScore = confidenceScore; }
 
     private Integer tokensUsed;
     private Double costUsd;
@@ -37,6 +32,11 @@ public class Trace {
 
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    // New relationship field
+    @ManyToOne
+    @JoinColumn(name = "project_id", nullable = true)
+    private Project project;
 
     // Getters and Setters
     public String getId() { return id; }
@@ -47,6 +47,12 @@ public class Trace {
 
     public String getResponse() { return response; }
     public void setResponse(String response) { this.response = response; }
+
+    public String getHallucinationData() { return hallucinationData; }
+    public void setHallucinationData(String hallucinationData) { this.hallucinationData = hallucinationData; }
+
+    public Double getConfidenceScore() { return confidenceScore; }
+    public void setConfidenceScore(Double confidenceScore) { this.confidenceScore = confidenceScore; }
 
     public Integer getTokensUsed() { return tokensUsed; }
     public void setTokensUsed(Integer tokensUsed) { this.tokensUsed = tokensUsed; }
@@ -62,4 +68,7 @@ public class Trace {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public Project getProject() { return project; }
+    public void setProject(Project project) { this.project = project; }
 }

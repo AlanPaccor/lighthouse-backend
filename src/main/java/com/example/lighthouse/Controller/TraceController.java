@@ -23,9 +23,14 @@ public class TraceController {
     @Autowired
     private AIService aiService;
 
-    // Get all traces
+    // Get all traces (with optional project filter)
     @GetMapping
-    public List<Trace> getAllTraces() {
+    public List<Trace> getAllTraces(@RequestParam(required = false) String projectId) {
+        // If projectId provided, filter by project
+        if (projectId != null && !projectId.isEmpty()) {
+            return traceRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        }
+        // Default: return all traces (backward compatible)
         return traceRepository.findTop100ByOrderByCreatedAtDesc();
     }
 
@@ -70,15 +75,28 @@ public class TraceController {
 
     // Get statistics
     @GetMapping("/stats")
-    public Map<String, Object> getStats() {
+    public Map<String, Object> getStats(@RequestParam(required = false) String projectId) {
         Map<String, Object> stats = new HashMap<>();
-        Double totalCost = traceRepository.getTotalCost();
-        Long totalRequests = traceRepository.getTotalRequests();
-        Double avgLatency = traceRepository.getAverageLatency();
 
-        stats.put("totalCost", totalCost != null ? totalCost : 0.0);
-        stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
-        stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
+        if (projectId != null && !projectId.isEmpty()) {
+            // Filter by project
+            Double totalCost = traceRepository.getTotalCostByProjectId(projectId);
+            Long totalRequests = traceRepository.getTotalRequestsByProjectId(projectId);
+            Double avgLatency = traceRepository.getAverageLatencyByProjectId(projectId);
+
+            stats.put("totalCost", totalCost != null ? totalCost : 0.0);
+            stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
+            stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
+        } else {
+            // Default: all stats (backward compatible)
+            Double totalCost = traceRepository.getTotalCost();
+            Long totalRequests = traceRepository.getTotalRequests();
+            Double avgLatency = traceRepository.getAverageLatency();
+
+            stats.put("totalCost", totalCost != null ? totalCost : 0.0);
+            stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
+            stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
+        }
 
         return stats;
     }

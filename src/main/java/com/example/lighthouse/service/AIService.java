@@ -3,8 +3,10 @@ package com.example.lighthouse.service;
 
 import com.example.lighthouse.Model.DatabaseConnection;
 import com.example.lighthouse.Model.Trace;
+import com.example.lighthouse.Model.ApiCredential;
 import com.example.lighthouse.repository.DatabaseConnectionRepository;
 import com.example.lighthouse.repository.TraceRepository;
+import com.example.lighthouse.repository.ApiCredentialRepository;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -16,12 +18,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Optional;
 
 @Service
 public class AIService {
 
     @Value("${gemini.api.key}")
-    private String geminiApiKey;
+    private String defaultGeminiApiKey; // Fallback key
 
     @Value("${gemini.api.url}")
     private String geminiApiUrl;
@@ -35,8 +38,23 @@ public class AIService {
     @Autowired
     private DatabaseConnectionRepository dbConnectionRepository;
 
+    @Autowired
+    private ApiCredentialRepository credentialRepository;
+
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final Gson gson = new Gson();
+
+    // Helper method to get API key (user's key or fallback)
+    private String getApiKey() {
+        Optional<ApiCredential> cred = credentialRepository.findByProviderAndIsActiveTrue("gemini");
+        if (cred.isPresent() && cred.get().getApiKey() != null && !cred.get().getApiKey().trim().isEmpty()) {
+            System.out.println("Using user's API key");
+            return cred.get().getApiKey();
+        }
+        // Fallback to default key from config
+        System.out.println("Using default API key from config");
+        return defaultGeminiApiKey;
+    }
 
     // Execute query without database
     public Trace executeQuery(String prompt) {
@@ -47,6 +65,8 @@ public class AIService {
         long startTime = System.currentTimeMillis();
 
         try {
+            String apiKey = getApiKey(); // Use user's key or fallback
+
             // Build Gemini request body
             JsonObject requestBody = new JsonObject();
             JsonArray contents = new JsonArray();
@@ -63,7 +83,7 @@ public class AIService {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(geminiApiUrl))
                     .header("Content-Type", "application/json")
-                    .header("X-goog-api-key", geminiApiKey)
+                    .header("X-goog-api-key", apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(requestBody)))
                     .build();
 
@@ -141,6 +161,8 @@ public class AIService {
         long startTime = System.currentTimeMillis();
 
         try {
+            String apiKey = getApiKey(); // Use user's key or fallback
+
             // 1. Get database connection
             DatabaseConnection dbConfig = dbConnectionRepository.findById(dbConnectionId)
                     .orElseThrow(() -> new RuntimeException("Database connection not found"));
@@ -184,7 +206,7 @@ public class AIService {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(geminiApiUrl))
                     .header("Content-Type", "application/json")
-                    .header("X-goog-api-key", geminiApiKey)
+                    .header("X-goog-api-key", apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(requestBody)))
                     .build();
 

@@ -82,3 +82,16 @@ DELETE {{baseUrl}}/api/traces/clear
 ### 11. DELETE A PROJECT
 ### ============================================
 DELETE {{baseUrl}}/api/projects/ac33f44c-47e4-4685-9c69-c4254695a0b3
+### 3. TEST SDK ENDPOINT (External SDK sends traces here)
+POST http://localhost:8080/api/sdk/traces
+Content-Type: application/json
+X-API-Key: lh_83513bd689b44ab9b53b679d689b50a9
+
+{
+  "prompt": "Hello, this is a test!",
+  "response": "This is a test response from the SDK",
+  "tokensUsed": 50,
+  "costUsd": 0.0001,
+  "latencyMs": 150,
+  "provider": "test"
+}

@@ -381,16 +381,14 @@ public class AIService {
     }
 
     private int estimateTokens(String prompt, String response) {
-        // Rough estimate: 1 token ≈ 4 characters
+        // Rough estimation: ~4 characters per token
         int totalChars = prompt.length() + response.length();
         return totalChars / 4;
     }
 
+    // In AIService.java - make sure calculateCost is correct
     private double calculateCost(int tokens, String model) {
-        // Gemini 2.0 Flash pricing (as of late 2024):
-        // Input: $0.075 per 1M tokens
-        // Output: $0.30 per 1M tokens
-        // Simplified average: $0.1875 per 1M tokens
+        // Gemini 2.0 Flash pricing: $0.1875 per 1M tokens
         double costPer1M = 0.1875;
         return (tokens / 1_000_000.0) * costPer1M;
     }

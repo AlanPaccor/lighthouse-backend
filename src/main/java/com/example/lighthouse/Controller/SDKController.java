@@ -1,26 +1,42 @@
 // src/main/java/com/example/lighthouse/controller/SDKController.java
 package com.example.lighthouse.Controller;
 
+import com.example.lighthouse.Model.DatabaseConnection;
 import com.example.lighthouse.Model.Project;
 import com.example.lighthouse.Model.Trace;
+import com.example.lighthouse.repository.DatabaseConnectionRepository;
 import com.example.lighthouse.repository.ProjectRepository;
 import com.example.lighthouse.repository.TraceRepository;
+import com.example.lighthouse.service.ExternalDatabaseService;
+import com.example.lighthouse.service.HallucinationDetector;
+import com.google.gson.Gson;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import java.time.LocalDateTime;
+
 import java.util.Map;
 import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/sdk")
-@CrossOrigin(origins = "*") // Allow external SDK calls from any origin
+@CrossOrigin(origins = "*")
 public class SDKController {
     @Autowired
     private TraceRepository traceRepository;
 
     @Autowired
     private ProjectRepository projectRepository;
+
+    @Autowired
+    private DatabaseConnectionRepository dbConnectionRepository;
+
+    @Autowired
+    private ExternalDatabaseService externalDbService;
+
+    @Autowired
+    private HallucinationDetector hallucinationDetector;
+
+    private final Gson gson = new Gson();
 
     @PostMapping("/traces")
     public ResponseEntity<Map<String, Object>> receiveTrace(
@@ -54,14 +70,53 @@ public class SDKController {
             trace.setLatencyMs(getIntValue(traceData, "latencyMs", 0));
             trace.setProvider(getStringValue(traceData, "provider", "unknown"));
 
-            // Optional fields
-            if (traceData.containsKey("confidenceScore")) {
-                trace.setConfidenceScore(getDoubleValue(traceData, "confidenceScore", null));
-            }
-
             // Link to project
             trace.setProject(project);
-            trace.setCreatedAt(LocalDateTime.now());
+            trace.setCreatedAt(java.time.LocalDateTime.now());
+
+            // NEW: Check if databaseConnectionId is provided for hallucination detection
+            String dbConnectionId = getStringValue(traceData, "databaseConnectionId", null);
+
+            if (dbConnectionId != null && !dbConnectionId.isEmpty()) {
+                try {
+                    // Find database connection
+                    Optional<DatabaseConnection> dbConfigOpt = dbConnectionRepository.findById(dbConnectionId);
+
+                    if (dbConfigOpt.isPresent()) {
+                        DatabaseConnection dbConfig = dbConfigOpt.get();
+
+                        // Search database for context based on the prompt
+                        String dbContext = externalDbService.searchDatabase(dbConfig, trace.getPrompt());
+
+                        // Run hallucination detection
+                        HallucinationDetector.HallucinationResult hallucinationResult =
+                                hallucinationDetector.detectHallucinations(
+                                        trace.getResponse(),
+                                        dbContext,
+                                        trace.getPrompt()
+                                );
+
+                        // Store hallucination results
+                        String hallucinationJson = gson.toJson(hallucinationResult);
+                        trace.setHallucinationData(hallucinationJson);
+                        trace.setConfidenceScore(hallucinationResult.getConfidenceScore());
+
+                        System.out.println("✅ Hallucination detection completed for SDK trace");
+                        System.out.println("   Confidence Score: " + hallucinationResult.getConfidenceScore());
+                    } else {
+                        System.out.println("⚠️ Database connection not found: " + dbConnectionId + " - Skipping hallucination detection");
+                    }
+                } catch (Exception e) {
+                    System.err.println("⚠️ Error during hallucination detection: " + e.getMessage());
+                    e.printStackTrace();
+                    // Continue without hallucination detection - don't fail the trace
+                }
+            }
+
+            // Optional: confidence score if provided directly
+            if (traceData.containsKey("confidenceScore") && trace.getConfidenceScore() == null) {
+                trace.setConfidenceScore(getDoubleValue(traceData, "confidenceScore", null));
+            }
 
             // Save trace
             Trace savedTrace = traceRepository.save(trace);
@@ -69,7 +124,8 @@ public class SDKController {
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "traceId", savedTrace.getId(),
-                    "message", "Trace recorded successfully"
+                    "message", "Trace recorded successfully",
+                    "confidenceScore", savedTrace.getConfidenceScore() != null ? savedTrace.getConfidenceScore() : "N/A"
             ));
 
         } catch (Exception e) {
@@ -81,7 +137,7 @@ public class SDKController {
         }
     }
 
-    // Helper methods to safely extract values
+    // Helper methods
     private String getStringValue(Map<String, Object> map, String key, String defaultValue) {
         Object value = map.get(key);
         return value != null ? value.toString() : defaultValue;

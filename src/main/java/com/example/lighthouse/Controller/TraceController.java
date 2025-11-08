@@ -1,9 +1,13 @@
-// src/main/java/com/example/lighthouse/controller/TraceController.java
 package com.example.lighthouse.Controller;
 
+import com.example.lighthouse.Model.DatabaseConnection;
 import com.example.lighthouse.Model.Trace;
+import com.example.lighthouse.repository.DatabaseConnectionRepository;
 import com.example.lighthouse.repository.TraceRepository;
 import com.example.lighthouse.service.AIService;
+import com.example.lighthouse.service.ExternalDatabaseService;
+import com.example.lighthouse.service.HallucinationDetector;
+import com.google.gson.Gson;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,18 +27,25 @@ public class TraceController {
     @Autowired
     private AIService aiService;
 
-    // Get all traces (with optional project filter)
+    @Autowired
+    private DatabaseConnectionRepository dbConnectionRepository;
+
+    @Autowired
+    private ExternalDatabaseService externalDbService;
+
+    @Autowired
+    private HallucinationDetector hallucinationDetector;
+
+    private final Gson gson = new Gson();
+
     @GetMapping
     public List<Trace> getAllTraces(@RequestParam(required = false) String projectId) {
-        // If projectId provided, filter by project
         if (projectId != null && !projectId.isEmpty()) {
             return traceRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
         }
-        // Default: return all traces (backward compatible)
         return traceRepository.findTop100ByOrderByCreatedAtDesc();
     }
 
-    // Get single trace by ID
     @GetMapping("/{id}")
     public ResponseEntity<Trace> getTrace(@PathVariable String id) {
         return traceRepository.findById(id)
@@ -42,7 +53,6 @@ public class TraceController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // Execute AI query WITHOUT database (regular query)
     @PostMapping("/query")
     public Trace executeQuery(@RequestBody Map<String, String> request) {
         String prompt = request.get("prompt");
@@ -53,7 +63,6 @@ public class TraceController {
         return aiService.executeQuery(prompt);
     }
 
-    // Execute query WITH external database connection
     @PostMapping("/query-with-db")
     public Trace executeQueryWithDB(@RequestBody Map<String, String> request) {
         String prompt = request.get("prompt");
@@ -73,13 +82,50 @@ public class TraceController {
         return trace;
     }
 
-    // Get statistics
+    @PostMapping("/validate-response")
+    public Trace validateResponse(@RequestBody Map<String, Object> request) {
+        String prompt = (String) request.get("prompt");
+        String response = (String) request.get("response");
+        String dbConnectionId = (String) request.get("databaseConnectionId");
+
+        if (prompt == null || response == null || dbConnectionId == null) {
+            throw new RuntimeException("prompt, response, and databaseConnectionId are required");
+        }
+
+        Trace trace = new Trace();
+        trace.setPrompt(prompt);
+        trace.setResponse(response);
+        trace.setTokensUsed(((Number) request.getOrDefault("tokensUsed", 0)).intValue());
+        trace.setCostUsd(((Number) request.getOrDefault("costUsd", 0.0)).doubleValue());
+        trace.setLatencyMs(((Number) request.getOrDefault("latencyMs", 0)).intValue());
+        trace.setProvider((String) request.getOrDefault("provider", "unknown"));
+
+        // Run hallucination detection
+        try {
+            DatabaseConnection dbConfig = dbConnectionRepository.findById(dbConnectionId)
+                    .orElseThrow(() -> new RuntimeException("Database connection not found"));
+
+            String dbContext = externalDbService.searchDatabase(dbConfig, prompt);
+
+            HallucinationDetector.HallucinationResult result =
+                    hallucinationDetector.detectHallucinations(response, dbContext, prompt);
+
+            trace.setHallucinationData(gson.toJson(result));
+            trace.setConfidenceScore(result.getConfidenceScore());
+
+        } catch (Exception e) {
+            System.err.println("Hallucination detection error: " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        return traceRepository.save(trace);
+    }
+
     @GetMapping("/stats")
     public Map<String, Object> getStats(@RequestParam(required = false) String projectId) {
         Map<String, Object> stats = new HashMap<>();
 
         if (projectId != null && !projectId.isEmpty()) {
-            // Filter by project
             Double totalCost = traceRepository.getTotalCostByProjectId(projectId);
             Long totalRequests = traceRepository.getTotalRequestsByProjectId(projectId);
             Double avgLatency = traceRepository.getAverageLatencyByProjectId(projectId);
@@ -88,7 +134,6 @@ public class TraceController {
             stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
             stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
         } else {
-            // Default: all stats (backward compatible)
             Double totalCost = traceRepository.getTotalCost();
             Long totalRequests = traceRepository.getTotalRequests();
             Double avgLatency = traceRepository.getAverageLatency();
@@ -101,10 +146,60 @@ public class TraceController {
         return stats;
     }
 
-    // Delete all traces (for demo reset)
     @DeleteMapping("/clear")
     public ResponseEntity<Void> clearTraces() {
         traceRepository.deleteAll();
         return ResponseEntity.ok().build();
+    }
+
+
+    /**
+     * Check hallucinations for an existing trace using a database connection
+     */
+    @PostMapping("/{traceId}/check-hallucinations")
+    public Trace checkHallucinationsForTrace(
+            @PathVariable String traceId,
+            @RequestBody Map<String, String> request
+    ) {
+        String dbConnectionId = request.get("dbConnectionId");
+
+        if (dbConnectionId == null || dbConnectionId.isEmpty()) {
+            throw new RuntimeException("dbConnectionId is required");
+        }
+
+        Trace trace = traceRepository.findById(traceId)
+                .orElseThrow(() -> new RuntimeException("Trace not found"));
+
+        // Skip if already has hallucination data
+        if (trace.getHallucinationData() != null && !trace.getHallucinationData().isEmpty()) {
+            return trace; // Already checked
+        }
+
+        try {
+            DatabaseConnection dbConfig = dbConnectionRepository.findById(dbConnectionId)
+                    .orElseThrow(() -> new RuntimeException("Database connection not found"));
+
+            // Search database for context
+            String dbContext = externalDbService.searchDatabase(dbConfig, trace.getPrompt());
+
+            // Detect hallucinations
+            HallucinationDetector.HallucinationResult result =
+                    hallucinationDetector.detectHallucinations(
+                            trace.getResponse(),
+                            dbContext,
+                            trace.getPrompt()
+                    );
+
+            // Update trace with results
+            trace.setHallucinationData(gson.toJson(result));
+            trace.setConfidenceScore(result.getConfidenceScore());
+
+            return traceRepository.save(trace);
+
+        } catch (Exception e) {
+            System.err.println("Error checking hallucinations: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to check hallucinations: " + e.getMessage());
+        }
     }
 }

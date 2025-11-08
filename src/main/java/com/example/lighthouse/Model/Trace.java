@@ -16,6 +16,19 @@ public class Trace {
 
     @Column(columnDefinition = "TEXT")
     private String response;
+    // Add to src/main/java/com/example/lighthouse/Model/Trace.java
+
+    @Column(columnDefinition = "TEXT")
+    private String hallucinationData; // JSON string with hallucination results
+
+    private Double confidenceScore; // 0-100
+
+    // Getters and Setters
+    public String getHallucinationData() { return hallucinationData; }
+    public void setHallucinationData(String hallucinationData) { this.hallucinationData = hallucinationData; }
+
+    public Double getConfidenceScore() { return confidenceScore; }
+    public void setConfidenceScore(Double confidenceScore) { this.confidenceScore = confidenceScore; }
 
     private Integer tokensUsed;
     private Double costUsd;

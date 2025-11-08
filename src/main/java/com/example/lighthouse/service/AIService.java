@@ -41,6 +41,9 @@ public class AIService {
     @Autowired
     private ApiCredentialRepository credentialRepository;
 
+    @Autowired
+    private HallucinationDetector hallucinationDetector;
+
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final Gson gson = new Gson();
 
@@ -265,6 +268,27 @@ public class AIService {
             trace.setLatencyMs(latency);
             trace.setTokensUsed(tokensUsed);
             trace.setCostUsd(cost);
+
+            // 9. Detect hallucinations (only for database queries)
+            try {
+                System.out.println("=== DETECTING HALLUCINATIONS ===");
+                HallucinationDetector.HallucinationResult hallucinationResult =
+                        hallucinationDetector.detectHallucinations(aiResponse, dbContext, userPrompt);
+
+                // Store hallucination data as JSON
+                String hallucinationJson = gson.toJson(hallucinationResult);
+                trace.setHallucinationData(hallucinationJson);
+                trace.setConfidenceScore(hallucinationResult.getConfidenceScore());
+
+                System.out.println("Confidence Score: " + hallucinationResult.getConfidenceScore());
+                System.out.println("Has Hallucinations: " + hallucinationResult.isHasHallucinations());
+                System.out.println("Unsupported Claims: " + hallucinationResult.getUnsupportedClaims().size());
+                System.out.println("=================================");
+            } catch (Exception e) {
+                System.err.println("Error detecting hallucinations: " + e.getMessage());
+                e.printStackTrace();
+                // Don't fail the whole request if hallucination detection fails
+            }
 
         } catch (Exception e) {
             trace.setResponse("Error: " + e.getMessage());

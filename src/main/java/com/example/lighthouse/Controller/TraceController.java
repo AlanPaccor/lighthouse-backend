@@ -1,5 +1,5 @@
 // src/main/java/com/example/lighthouse/controller/TraceController.java
-package com.example.lighthouse.controller;
+package com.example.lighthouse.Controller;
 
 import com.example.lighthouse.Model.Trace;
 import com.example.lighthouse.repository.TraceRepository;
@@ -37,20 +37,49 @@ public class TraceController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // Execute AI query and create trace
+    // Execute AI query WITHOUT database (regular query)
     @PostMapping("/query")
     public Trace executeQuery(@RequestBody Map<String, String> request) {
         String prompt = request.get("prompt");
+        if (prompt == null || prompt.isEmpty()) {
+            throw new RuntimeException("Prompt is required");
+        }
+        System.out.println("Executing query WITHOUT database: " + prompt);
         return aiService.executeQuery(prompt);
+    }
+
+    // Execute query WITH external database connection
+    @PostMapping("/query-with-db")
+    public Trace executeQueryWithDB(@RequestBody Map<String, String> request) {
+        String prompt = request.get("prompt");
+        String dbConnectionId = request.get("dbConnectionId");
+
+        if (prompt == null || prompt.isEmpty()) {
+            throw new RuntimeException("Prompt is required");
+        }
+        if (dbConnectionId == null || dbConnectionId.isEmpty()) {
+            throw new RuntimeException("Database connection ID is required");
+        }
+
+        System.out.println("Executing query WITH database connection: " + dbConnectionId);
+        System.out.println("Query: " + prompt);
+
+        Trace trace = aiService.executeQueryWithExternalDB(prompt, dbConnectionId);
+        return trace;
     }
 
     // Get statistics
     @GetMapping("/stats")
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
-        stats.put("totalCost", traceRepository.getTotalCost());
-        stats.put("totalRequests", traceRepository.getTotalRequests());
-        stats.put("averageLatency", traceRepository.getAverageLatency());
+        Double totalCost = traceRepository.getTotalCost();
+        Long totalRequests = traceRepository.getTotalRequests();
+        Double avgLatency = traceRepository.getAverageLatency();
+
+        stats.put("totalCost", totalCost != null ? totalCost : 0.0);
+        stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
+        stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
+
         return stats;
     }
 

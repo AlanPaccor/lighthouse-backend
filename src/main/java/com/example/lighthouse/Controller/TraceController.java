@@ -4,12 +4,11 @@ import com.example.lighthouse.Model.DatabaseConnection;
 import com.example.lighthouse.Model.Trace;
 import com.example.lighthouse.repository.DatabaseConnectionRepository;
 import com.example.lighthouse.repository.TraceRepository;
-import com.example.lighthouse.service.AIService;
-import com.example.lighthouse.service.ExternalDatabaseService;
-import com.example.lighthouse.service.HallucinationDetector;
+import com.example.lighthouse.service.*;
 import com.google.gson.Gson;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -35,6 +34,12 @@ public class TraceController {
 
     @Autowired
     private HallucinationDetector hallucinationDetector;
+
+    @Autowired(required = false)
+    private EmailService emailService;
+
+    @Autowired
+    private SupabaseAuthService supabaseAuthService;
 
     private final Gson gson = new Gson();
 
@@ -64,7 +69,9 @@ public class TraceController {
     }
 
     @PostMapping("/query-with-db")
-    public Trace executeQueryWithDB(@RequestBody Map<String, String> request) {
+    public Trace executeQueryWithDB(
+            @RequestBody Map<String, String> request,
+            Authentication authentication) {
         String prompt = request.get("prompt");
         String dbConnectionId = request.get("dbConnectionId");
 
@@ -79,11 +86,43 @@ public class TraceController {
         System.out.println("Query: " + prompt);
 
         Trace trace = aiService.executeQueryWithExternalDB(prompt, dbConnectionId);
+
+        // Check if hallucination was detected and send email
+        if (trace.getHallucinationData() != null && authentication != null) {
+            try {
+                HallucinationDetector.HallucinationResult result = gson.fromJson(
+                        trace.getHallucinationData(),
+                        HallucinationDetector.HallucinationResult.class
+                );
+
+                if (result != null && result.getConfidenceScore() < 50.0) {
+                    String userEmail = supabaseAuthService.getUserEmail(authentication);
+                    if (userEmail != null && emailService != null) {
+                        System.out.println("📧 Sending email for query-with-db endpoint");
+                        hallucinationDetector.notifyHallucination(
+                                trace.getId(),
+                                result,
+                                userEmail,
+                                trace.getPrompt(),
+                                trace.getResponse()
+                        );
+                    } else {
+                        System.out.println("⚠️ Email not sent - userEmail: " + userEmail + ", emailService: " + (emailService != null));
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error sending email notification in query-with-db: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+
         return trace;
     }
 
     @PostMapping("/validate-response")
-    public Trace validateResponse(@RequestBody Map<String, Object> request) {
+    public Trace validateResponse(
+            @RequestBody Map<String, Object> request,
+            Authentication authentication) {
         String prompt = (String) request.get("prompt");
         String response = (String) request.get("response");
         String dbConnectionId = (String) request.get("databaseConnectionId");
@@ -100,7 +139,6 @@ public class TraceController {
         trace.setLatencyMs(((Number) request.getOrDefault("latencyMs", 0)).intValue());
         trace.setProvider((String) request.getOrDefault("provider", "unknown"));
 
-        // Run hallucination detection
         try {
             DatabaseConnection dbConfig = dbConnectionRepository.findById(dbConnectionId)
                     .orElseThrow(() -> new RuntimeException("Database connection not found"));
@@ -113,23 +151,41 @@ public class TraceController {
             trace.setHallucinationData(gson.toJson(result));
             trace.setConfidenceScore(result.getConfidenceScore());
 
+            Trace savedTrace = traceRepository.save(trace);
+
+            // Send email notification if hallucination detected
+            if (result.getConfidenceScore() < 50.0 && authentication != null) {
+                String userEmail = supabaseAuthService.getUserEmail(authentication);
+                if (userEmail != null && emailService != null) {
+                    System.out.println("📧 Sending email for validate-response endpoint");
+                    hallucinationDetector.notifyHallucination(
+                            savedTrace.getId(),
+                            result,
+                            userEmail,
+                            prompt,
+                            response
+                    );
+                } else {
+                    System.out.println("⚠️ Email not sent - userEmail: " + userEmail + ", emailService: " + (emailService != null));
+                }
+            }
+
+            return savedTrace;
         } catch (Exception e) {
             System.err.println("Hallucination detection error: " + e.getMessage());
             e.printStackTrace();
+            // Still save the trace even if hallucination detection fails
+            return traceRepository.save(trace);
         }
-
-        return traceRepository.save(trace);
     }
 
     @GetMapping("/stats")
     public Map<String, Object> getStats(@RequestParam(required = false) String projectId) {
         Map<String, Object> stats = new HashMap<>();
-
         if (projectId != null && !projectId.isEmpty()) {
             Double totalCost = traceRepository.getTotalCostByProjectId(projectId);
             Long totalRequests = traceRepository.getTotalRequestsByProjectId(projectId);
             Double avgLatency = traceRepository.getAverageLatencyByProjectId(projectId);
-
             stats.put("totalCost", totalCost != null ? totalCost : 0.0);
             stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
             stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
@@ -137,12 +193,10 @@ public class TraceController {
             Double totalCost = traceRepository.getTotalCost();
             Long totalRequests = traceRepository.getTotalRequests();
             Double avgLatency = traceRepository.getAverageLatency();
-
             stats.put("totalCost", totalCost != null ? totalCost : 0.0);
             stats.put("totalRequests", totalRequests != null ? totalRequests : 0L);
             stats.put("averageLatency", avgLatency != null ? avgLatency : 0.0);
         }
-
         return stats;
     }
 
@@ -152,54 +206,112 @@ public class TraceController {
         return ResponseEntity.ok().build();
     }
 
-
     /**
-     * Check hallucinations for an existing trace using a database connection
+     * Check hallucinations for an existing trace using a database connection,
+     * then notify via email if a hallucination is detected
      */
     @PostMapping("/{traceId}/check-hallucinations")
-    public Trace checkHallucinationsForTrace(
+    public ResponseEntity<Trace> checkHallucinationsForTrace(
             @PathVariable String traceId,
-            @RequestBody Map<String, String> request
-    ) {
-        String dbConnectionId = request.get("dbConnectionId");
-
-        if (dbConnectionId == null || dbConnectionId.isEmpty()) {
-            throw new RuntimeException("dbConnectionId is required");
-        }
-
-        Trace trace = traceRepository.findById(traceId)
-                .orElseThrow(() -> new RuntimeException("Trace not found"));
-
-        // Skip if already has hallucination data
-        if (trace.getHallucinationData() != null && !trace.getHallucinationData().isEmpty()) {
-            return trace; // Already checked
-        }
+            @RequestBody Map<String, String> request,
+            Authentication authentication) {
 
         try {
-            DatabaseConnection dbConfig = dbConnectionRepository.findById(dbConnectionId)
+            String dbConnectionId = request.get("dbConnectionId");
+            if (dbConnectionId == null || dbConnectionId.isEmpty()) {
+                return ResponseEntity.badRequest().build();
+            }
+
+            Trace trace = traceRepository.findById(traceId)
+                    .orElseThrow(() -> new RuntimeException("Trace not found"));
+
+            DatabaseConnection dbConnection = dbConnectionRepository.findById(dbConnectionId)
                     .orElseThrow(() -> new RuntimeException("Database connection not found"));
 
-            // Search database for context
-            String dbContext = externalDbService.searchDatabase(dbConfig, trace.getPrompt());
+            // Get database context
+            String databaseContext = externalDbService.searchDatabase(dbConnection, trace.getPrompt());
 
-            // Detect hallucinations
+            // Run hallucination detection
             HallucinationDetector.HallucinationResult result =
                     hallucinationDetector.detectHallucinations(
                             trace.getResponse(),
-                            dbContext,
+                            databaseContext,
                             trace.getPrompt()
                     );
 
-            // Update trace with results
+            // Store results
             trace.setHallucinationData(gson.toJson(result));
             trace.setConfidenceScore(result.getConfidenceScore());
 
-            return traceRepository.save(trace);
+            Trace updatedTrace = traceRepository.save(trace);
 
+            // Send email notification if hallucination detected
+            System.out.println("📧 Email check - Authentication: " + (authentication != null));
+            System.out.println("📧 Email check - Email service: " + (emailService != null));
+            System.out.println("📧 Email check - Confidence: " + result.getConfidenceScore() + "%");
+
+            if (authentication != null && emailService != null) {
+                String userEmail = supabaseAuthService.getUserEmail(authentication);
+                System.out.println("📧 Email check - User email: " + userEmail);
+
+                if (userEmail != null && result.getConfidenceScore() < 50.0) {
+                    System.out.println("📧 Sending email notification for trace: " + traceId);
+                    hallucinationDetector.notifyHallucination(
+                            traceId,
+                            result,
+                            userEmail,
+                            trace.getPrompt(),
+                            trace.getResponse()
+                    );
+                } else {
+                    if (userEmail == null) {
+                        System.out.println("⚠️ Email not sent - userEmail is null");
+                    } else {
+                        System.out.println("⚠️ Email not sent - confidence " + result.getConfidenceScore() + "% >= 50%");
+                    }
+                }
+            } else {
+                System.out.println("⚠️ Email not sent - authentication: " + (authentication != null) + ", emailService: " + (emailService != null));
+            }
+
+            return ResponseEntity.ok(updatedTrace);
         } catch (Exception e) {
-            System.err.println("Error checking hallucinations: " + e.getMessage());
+            System.err.println("Hallucination detection error: " + e.getMessage());
             e.printStackTrace();
-            throw new RuntimeException("Failed to check hallucinations: " + e.getMessage());
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    /**
+     * Test endpoint to verify email configuration
+     */
+    @GetMapping("/test-email")
+    public ResponseEntity<String> testEmail(Authentication authentication) {
+        if (authentication == null) {
+            return ResponseEntity.badRequest().body("No authentication");
+        }
+
+        String userEmail = supabaseAuthService.getUserEmail(authentication);
+        if (userEmail == null) {
+            return ResponseEntity.badRequest().body("No user email found. Principal: " + authentication.getName());
+        }
+
+        if (emailService == null) {
+            return ResponseEntity.badRequest().body("Email service not configured");
+        }
+
+        try {
+            emailService.sendHallucinationAlert(
+                    userEmail,
+                    "test-trace-123",
+                    "Test prompt: What is the capital of France?",
+                    "Test response: The capital of France is Paris.",
+                    30.0,
+                    2
+            );
+            return ResponseEntity.ok("Test email sent to: " + userEmail);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Error sending test email: " + e.getMessage());
         }
     }
 }

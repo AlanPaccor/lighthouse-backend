@@ -1,8 +1,8 @@
-// src/main/java/com/example/lighthouse/service/HallucinationDetector.java
 package com.example.lighthouse.service;
 
 import com.example.lighthouse.Model.ApiCredential;
 import com.example.lighthouse.repository.ApiCredentialRepository;
+import com.example.lighthouse.repository.TraceRepository;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -30,6 +30,12 @@ public class HallucinationDetector {
     @Autowired(required = false)
     private ApiCredentialRepository credentialRepository;
 
+    @Autowired(required = false)
+    private EmailService emailService;
+
+    @Autowired
+    private TraceRepository traceRepository;
+
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final Gson gson = new Gson();
 
@@ -50,16 +56,12 @@ public class HallucinationDetector {
         // Getters and Setters
         public double getConfidenceScore() { return confidenceScore; }
         public void setConfidenceScore(double confidenceScore) { this.confidenceScore = confidenceScore; }
-
         public List<String> getUnsupportedClaims() { return unsupportedClaims; }
         public void setUnsupportedClaims(List<String> unsupportedClaims) { this.unsupportedClaims = unsupportedClaims; }
-
         public List<String> getSupportedClaims() { return supportedClaims; }
         public void setSupportedClaims(List<String> supportedClaims) { this.supportedClaims = supportedClaims; }
-
         public String getAiReview() { return aiReview; }
         public void setAiReview(String aiReview) { this.aiReview = aiReview; }
-
         public boolean isHasHallucinations() { return hasHallucinations; }
         public void setHasHallucinations(boolean hasHallucinations) { this.hasHallucinations = hasHallucinations; }
     }
@@ -72,7 +74,6 @@ public class HallucinationDetector {
 
         // Step 1: Extract factual claims from AI response
         List<String> claims = extractClaims(aiResponse);
-
         if (claims.isEmpty()) {
             result.setConfidenceScore(100.0);
             result.setAiReview("No specific factual claims detected in the response.");
@@ -109,120 +110,120 @@ public class HallucinationDetector {
     }
 
     /**
+     * Send email notification if hallucination detected
+     */
+    public void notifyHallucination(String traceId, HallucinationResult result,
+                                    String userEmail, String prompt, String response) {
+        // Only send email if confidence is below 50% (hallucination detected)
+        if (result.getConfidenceScore() < 50.0 && emailService != null && userEmail != null) {
+            try {
+                System.out.println("📧 Sending hallucination alert email...");
+                System.out.println("   - To: " + userEmail);
+                System.out.println("   - Trace ID: " + traceId);
+                System.out.println("   - Confidence: " + result.getConfidenceScore() + "%");
+
+                emailService.sendHallucinationAlert(
+                        userEmail,
+                        traceId,
+                        prompt,
+                        response,
+                        result.getConfidenceScore(),
+                        result.getUnsupportedClaims() != null ? result.getUnsupportedClaims().size() : 0
+                );
+            } catch (Exception e) {
+                System.err.println("❌ Failed to send hallucination notification: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } else {
+            if (emailService == null) {
+                System.out.println("⚠️ Email service not available - skipping notification");
+            } else if (userEmail == null) {
+                System.out.println("⚠️ No user email available - skipping notification");
+            } else if (result.getConfidenceScore() >= 50.0) {
+                System.out.println("ℹ️ Confidence " + result.getConfidenceScore() + "% >= 50% - no email needed");
+            }
+        }
+    }
+
+    /**
      * Extract factual claims from AI response
      */
     private List<String> extractClaims(String response) {
         List<String> claims = new ArrayList<>();
-
         // Remove common phrases that aren't claims
         String cleaned = response.replaceAll("(?i)(according to|based on|the database shows|i found|i have)", "");
-
         // Extract sentences that contain factual information
         String[] sentences = cleaned.split("[.!?]+");
-
         for (String sentence : sentences) {
             sentence = sentence.trim();
             if (sentence.length() < 10) continue; // Skip very short sentences
-
             // Look for factual patterns
             if (containsFactualPattern(sentence)) {
                 claims.add(sentence);
             }
         }
-
         // Also extract specific data points (numbers, dates, names)
         extractDataPoints(response, claims);
-
         return claims;
     }
 
-    /**
-     * Check if sentence contains factual patterns
-     */
     private boolean containsFactualPattern(String sentence) {
-        // Patterns that indicate factual claims
         String[] patterns = {
-                "\\d+",  // Contains numbers
-                "\\b(is|was|are|were|has|have|had)\\b",  // State of being
-                "\\b(\\d{4})\\b",  // Years
-                "\\b([A-Z][a-z]+ [A-Z][a-z]+)\\b",  // Proper names
+                "\\d+",
+                "\\b(is|was|are|were|has|have|had)\\b",
+                "\\b(\\d{4})\\b",
+                "\\b([A-Z][a-z]+ [A-Z][a-z]+)\\b"
         };
-
         for (String pattern : patterns) {
             if (Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(sentence).find()) {
                 return true;
             }
         }
-
         return false;
     }
 
-    /**
-     * Extract specific data points (numbers, dates, names)
-     */
     private void extractDataPoints(String response, List<String> claims) {
-        // Extract years
         Pattern yearPattern = Pattern.compile("\\b(19|20)\\d{2}\\b");
         Matcher yearMatcher = yearPattern.matcher(response);
         while (yearMatcher.find()) {
             claims.add("Year: " + yearMatcher.group());
         }
-
-        // Extract numbers that might be counts or metrics
         Pattern numberPattern = Pattern.compile("\\b\\d+\\b");
         Matcher numberMatcher = numberPattern.matcher(response);
         Set<String> numbers = new HashSet<>();
         while (numberMatcher.find()) {
             String num = numberMatcher.group();
-            if (num.length() <= 4) { // Reasonable numbers
+            if (num.length() <= 4) {
                 numbers.add("Number: " + num);
             }
         }
         claims.addAll(numbers);
     }
 
-    /**
-     * Check if a claim is supported by database context
-     */
     private boolean isClaimSupported(String claim, String databaseContext) {
         if (databaseContext == null || databaseContext.trim().isEmpty()) {
             return false;
         }
-
-        // Normalize for comparison
         String normalizedClaim = claim.toLowerCase().trim();
         String normalizedContext = databaseContext.toLowerCase();
-
-        // Extract key terms from claim
         String[] claimWords = normalizedClaim.split("\\s+");
         List<String> significantWords = new ArrayList<>();
-
         for (String word : claimWords) {
-            // Skip common words
             if (!isStopWord(word) && word.length() > 3) {
                 significantWords.add(word);
             }
         }
-
-        if (significantWords.isEmpty()) {
-            return true; // No significant words to check
-        }
-
-        // Check if at least 50% of significant words appear in context
+        if (significantWords.isEmpty()) return true;
         int matches = 0;
         for (String word : significantWords) {
             if (normalizedContext.contains(word)) {
                 matches++;
             }
         }
-
         double matchRatio = (double) matches / significantWords.size();
-        return matchRatio >= 0.5; // At least 50% match
+        return matchRatio >= 0.5;
     }
 
-    /**
-     * Check if word is a stop word (common word that doesn't add meaning)
-     */
     private boolean isStopWord(String word) {
         Set<String> stopWords = Set.of(
                 "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -234,13 +235,9 @@ public class HallucinationDetector {
         return stopWords.contains(word.toLowerCase());
     }
 
-    /**
-     * Use AI to review hallucinations and provide context
-     */
     private String generateAIReview(String aiResponse, String databaseContext, HallucinationResult result) {
         try {
             String apiKey = getApiKey();
-
             if (apiKey == null || apiKey.trim().isEmpty()) {
                 return "Unable to generate AI review: No API key available.";
             }
@@ -280,7 +277,6 @@ public class HallucinationDetector {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
             if (response.statusCode() == 200) {
                 JsonObject responseJson = gson.fromJson(response.body(), JsonObject.class);
                 return extractReviewFromResponse(responseJson);
@@ -319,11 +315,7 @@ public class HallucinationDetector {
         return "Review generation failed";
     }
 
-    /**
-     * Get API key - tries user's key first, then falls back to default
-     */
     private String getApiKey() {
-        // Try to get user's API key from repository
         if (credentialRepository != null) {
             try {
                 Optional<ApiCredential> cred = credentialRepository.findByProviderAndIsActiveTrue("gemini");
@@ -334,8 +326,6 @@ public class HallucinationDetector {
                 System.err.println("Error getting user API key: " + e.getMessage());
             }
         }
-
-        // Fallback to default key from config
         return defaultGeminiApiKey;
     }
 }

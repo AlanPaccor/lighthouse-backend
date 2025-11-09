@@ -23,6 +23,19 @@ public class Project {
 
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+    
+    // Add this field to your existing Project entity
+    @Column(name = "user_id")
+    private String userId; // Supabase user ID
+
+    // Add getter and setter
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
 
     // Getters and Setters
     public String getId() { return id; }

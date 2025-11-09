@@ -9,4 +9,5 @@ import java.util.List;
 public interface ProjectRepository extends JpaRepository<Project, String> {
     Optional<Project> findByApiKey(String apiKey);
     List<Project> findAllByOrderByCreatedAtDesc();
+    List<Project> findByUserIdOrderByCreatedAtDesc(String userId);
 }
